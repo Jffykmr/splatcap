@@ -1,0 +1,85 @@
+{
+  "extraMetadata" : {
+    "cgImagePropertyOrientation" : 6,
+    "autoCapture" : true,
+    "qualityBand" : "good",
+    "sessionPointCloudFilename" : "lidar_pointcloud_world_xyz.bin",
+    "format" : "jpeg",
+    "stabilityBypassed" : false,
+    "capturedPointSamplesAdded" : 1200,
+    "depthAvailable" : true,
+    "qualitySummary" : "stable ar tracking",
+    "stream" : "wide",
+    "qualityScore" : 0.88,
+    "captureSource" : "arkit_lidar"
+  },
+  "auxiliaryOutputs" : [
+    {
+      "filename" : "wide_20260715_101053_150_depth.bin",
+      "height" : 192,
+      "width" : 256,
+      "type" : "depth",
+      "bytesPerRow" : 1024,
+      "pixelFormat" : 1717855600
+    },
+    {
+      "bytesPerRow" : 256,
+      "height" : 192,
+      "type" : "depthConfidence",
+      "filename" : "wide_20260715_101053_150_confidence.bin",
+      "pixelFormat" : 1278226488,
+      "width" : 256
+    },
+    {
+      "type" : "pointCloudXYZ",
+      "coordinateSystem" : "world",
+      "filename" : "lidar_pointcloud_world_xyz.bin",
+      "units" : "meters"
+    }
+  ],
+  "metadata" : {
+    "source" : "arkit",
+    "camera" : {
+      "trackingState" : "normal",
+      "transform" : [
+        0.43796750903129578,
+        -0.73938947916030884,
+        -0.51135838031768799,
+        0,
+        -0.83613669872283936,
+        -0.12607677280902863,
+        -0.53383487462997437,
+        0,
+        0.33024147152900696,
+        0.66136783361434937,
+        -0.67344844341278076,
+        0,
+        -2.9454567432403564,
+        -0.51090067625045776,
+        -2.1952049732208252,
+        0.99999988079071045
+      ],
+      "arFrameTimestamp" : 355321.01490216597,
+      "intrinsics" : [
+        1346.6446533203125,
+        0,
+        0,
+        0,
+        1346.6446533203125,
+        0,
+        957.769287109375,
+        721.64813232421875,
+        1
+      ],
+      "imageResolution" : {
+        "height" : 1440,
+        "width" : 1920
+      },
+      "eulerAngles" : [
+        -0.72264093160629272,
+        2.6856756210327148,
+        -1.7396867275238037
+      ]
+    }
+  }
+}
