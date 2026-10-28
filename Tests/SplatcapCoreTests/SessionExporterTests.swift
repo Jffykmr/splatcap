@@ -111,6 +111,17 @@ final class SessionExporterTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: dir.appendingPathComponent("images/\(f.name).jpg").path))
     }
 
+    func testRotatedDepthGridIsWrittenWithItsOwnSize() throws {
+        let dir = tempDir()
+        let ex = try SessionExporter(directory: dir)
+        let f = try loadInputs("shared")[0]
+        try ex.append(frame: f, jpeg: jpeg, depth: depth, confidence: conf, depthWidth: 192, depthHeight: 256)
+        let png = try Data(contentsOf: dir.appendingPathComponent("depths/\(f.name).png"))
+        func be32(_ o: Int) -> Int { (Int(png[o]) << 24) | (Int(png[o + 1]) << 16) | (Int(png[o + 2]) << 8) | Int(png[o + 3]) }
+        XCTAssertEqual(be32(16), 192)
+        XCTAssertEqual(be32(20), 256)
+    }
+
     func testWrongDepthSizeThrows() throws {
         let ex = try SessionExporter(directory: tempDir())
         let f = try loadInputs("shared")[0]

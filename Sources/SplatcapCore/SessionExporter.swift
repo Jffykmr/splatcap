@@ -31,8 +31,8 @@ public enum SessionExporterError: Error {
 /// Writes a Nerfstudio dataset (images/, depths/, transforms.json, sparse_pc.ply) that Spirula Studio opens directly.
 /// Frames are written as given: callers apply any world or camera rotation beforehand.
 public final class SessionExporter {
-    static let depthWidth = 256
-    static let depthHeight = 192
+    public static let depthWidth = 256
+    public static let depthHeight = 192
     static let intrinsicsTolerance: Float = 1e-3
     static let eagerTransformsFrames = 10
 
@@ -46,11 +46,14 @@ public final class SessionExporter {
         }
     }
 
-    public func append(frame: ExportedFrame, jpeg: Data, depth: [Float], confidence: [UInt8]) throws {
-        let n = Self.depthWidth * Self.depthHeight
-        guard depth.count == n, confidence.count == n else { throw SessionExporterError.wrongDepthSize(depth.count) }
+    /// `depthWidth` x `depthHeight` is the depth grid as stored (192 x 256 after a quarter-turn rotation).
+    public func append(frame: ExportedFrame, jpeg: Data, depth: [Float], confidence: [UInt8],
+                       depthWidth: Int = SessionExporter.depthWidth, depthHeight: Int = SessionExporter.depthHeight) throws {
+        let n = depthWidth * depthHeight
+        guard n > 0, depth.count == n, confidence.count == n else { throw SessionExporterError.wrongDepthSize(depth.count) }
         try jpeg.write(to: directory.appendingPathComponent("images/\(frame.name).jpg"), options: .atomic)
-        try Self.depthPng(depth: depth, confidence: confidence).write(to: directory.appendingPathComponent("depths/\(frame.name).png"), options: .atomic)
+        try Self.depthPng(depth: depth, confidence: confidence, width: depthWidth, height: depthHeight)
+            .write(to: directory.appendingPathComponent("depths/\(frame.name).png"), options: .atomic)
         frames.append(frame)
         // Rewrite on each of the first frames, then every 10th, so a killed app still leaves a loadable dataset.
         if frames.count <= Self.eagerTransformsFrames || frames.count % Self.eagerTransformsFrames == 0 {
@@ -97,7 +100,7 @@ public final class SessionExporter {
     }
 
     /// 16-bit grayscale PNG in millimetres; 0 where confidence < 2 or the value is unusable.
-    static func depthPng(depth: [Float], confidence: [UInt8]) throws -> Data {
+    static func depthPng(depth: [Float], confidence: [UInt8], width: Int, height: Int) throws -> Data {
         var mm = [UInt16](repeating: 0, count: depth.count)
         for i in 0..<depth.count where confidence[i] >= 2 && depth[i].isFinite && depth[i] > 0 && depth[i] < 65.535 {
             mm[i] = UInt16((depth[i] * 1000).rounded())
@@ -105,8 +108,8 @@ public final class SessionExporter {
         let bytes = mm.flatMap { [UInt8($0 >> 8), UInt8($0 & 0xFF)] } // big-endian samples
         let info = CGBitmapInfo(rawValue: CGImageAlphaInfo.none.rawValue | CGBitmapInfo.byteOrder16Big.rawValue)
         guard let provider = CGDataProvider(data: Data(bytes) as CFData),
-              let image = CGImage(width: depthWidth, height: depthHeight, bitsPerComponent: 16, bitsPerPixel: 16,
-                                  bytesPerRow: depthWidth * 2, space: CGColorSpaceCreateDeviceGray(), bitmapInfo: info,
+              let image = CGImage(width: width, height: height, bitsPerComponent: 16, bitsPerPixel: 16,
+                                  bytesPerRow: width * 2, space: CGColorSpaceCreateDeviceGray(), bitmapInfo: info,
                                   provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent)
         else { throw SessionExporterError.pngEncodingFailed }
         let out = NSMutableData()
