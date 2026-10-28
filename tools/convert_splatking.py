@@ -3,6 +3,7 @@
 Uso: python convert_splatking.py <capture_dir> <out_dir>
 """
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -13,6 +14,9 @@ from splatcap_tools.frames import check_pixel_geometry, neutralize_exif, parse_f
 from splatcap_tools.nerfstudio import write_transforms
 from splatcap_tools.ply import write_seed_ply
 
+# ARKit ha Y in alto, Spirula/Nerfstudio Z in alto: ruota il mondo di +90 gradi attorno a X.
+Z_UP = np.array([[1, 0, 0, 0], [0, 0, -1, 0], [0, 1, 0, 0], [0, 0, 0, 1]], dtype=float)
+
 
 def convert(capture: Path, out: Path) -> list:
     images_in = capture / "COLMAP_Text_Model" / "images"
@@ -21,6 +25,7 @@ def convert(capture: Path, out: Path) -> list:
     frames, seed_pts, seed_cols = [], [], []
     for js in sorted(sensors.glob("*.json")):
         frame = parse_frame(js)
+        frame = replace(frame, cam_to_world=Z_UP @ frame.cam_to_world)
         src = images_in / f"{frame.name}.jpg"
         if not src.exists():
             continue

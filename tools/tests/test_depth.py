@@ -100,3 +100,15 @@ def test_seed_written_with_colors_when_confident(tmp_path):
     n = int([l for l in header.decode().splitlines() if l.startswith("element vertex")][0].split()[-1])
     assert n > 0 and len(body) == n * (12 + 3)
     assert tuple(body[12:15]) == (10, 200, 30)
+
+
+def test_export_world_is_z_up(tmp_path):
+    import json
+
+    from splatcap_tools.frames import parse_frame
+
+    out = tmp_path / "out"
+    convert(_synthetic_capture(tmp_path, conf_value=2), out)
+    t_arkit = parse_frame(FIXTURE).cam_to_world[:3, 3]
+    m = np.array(json.loads((out / "transforms.json").read_text())["frames"][0]["transform_matrix"])
+    assert np.allclose(m[:3, 3], [t_arkit[0], -t_arkit[2], t_arkit[1]])
