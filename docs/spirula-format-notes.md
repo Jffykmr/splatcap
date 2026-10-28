@@ -13,3 +13,5 @@ Verificato nel documento:
 NON verificato (scelta mia, da confermare provando in Spirula):
 - Nome esatto del file di profondità: uso `depths/<nome immagine>.png` per analogia con le maschere (`frame.png`).
 - Risoluzione: la profondità resta a 256x192 (rapporto 4:3, come la foto). Il documento non dice come Spirula la ridimensiona.
+
+Verificato il 2026-10-28 provando in Spirula: con `seed.ply` il log dice "Seed points drawn at random" (palla di punti). Il nome di default che Spirula cerca è `sparse_pc.ply` (override: `--seed-pointcloud`). Convertitore corretto.

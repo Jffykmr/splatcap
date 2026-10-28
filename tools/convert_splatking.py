@@ -37,7 +37,7 @@ def convert(capture: Path, out: Path) -> list:
                 seed_cols.append(sample_colors(pts, frame, np.asarray(Image.open(src).convert("RGB"))))
     write_transforms(frames, out)
     if seed_pts:
-        write_seed_ply(np.vstack(seed_pts), np.vstack(seed_cols), out / "seed.ply")
+        write_seed_ply(np.vstack(seed_pts), np.vstack(seed_cols), out / "sparse_pc.ply")
     return frames
 
 

@@ -88,13 +88,13 @@ def test_empty_seed_not_written(tmp_path):
     frames = convert(_synthetic_capture(tmp_path, conf_value=0), out)
     assert len(frames) == 1
     assert (out / "transforms.json").exists()
-    assert not (out / "seed.ply").exists()
+    assert not (out / "sparse_pc.ply").exists()
 
 
 def test_seed_written_with_colors_when_confident(tmp_path):
     out = tmp_path / "out"
     convert(_synthetic_capture(tmp_path, conf_value=2), out)
-    raw = (out / "seed.ply").read_bytes()
+    raw = (out / "sparse_pc.ply").read_bytes()
     header, _, body = raw.partition(b"end_header\n")
     assert b"property uchar red" in header and b"format binary_little_endian 1.0" in header
     n = int([l for l in header.decode().splitlines() if l.startswith("element vertex")][0].split()[-1])
