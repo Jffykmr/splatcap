@@ -1,0 +1,22 @@
+name: Splatcap
+options:
+  bundleIdPrefix: com.splatcap
+  deploymentTarget:
+    iOS: "17.0"
+packages:
+  SplatcapCore:
+    path: ..
+targets:
+  Splatcap:
+    type: application
+    platform: iOS
+    sources: [Sources]
+    dependencies:
+      - package: SplatcapCore
+    settings:
+      base:
+        INFOPLIST_FILE: Info.plist
+        PRODUCT_BUNDLE_IDENTIFIER: com.splatcap.app
+        TARGETED_DEVICE_FAMILY: "1"
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"

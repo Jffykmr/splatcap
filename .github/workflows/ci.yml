@@ -1,0 +1,25 @@
+name: ci
+on: [push, pull_request]
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test SplatcapCore
+        run: swift test
+      - name: Generate Xcode project
+        run: brew install xcodegen && xcodegen --spec App/project.yml
+      - name: Build unsigned app
+        run: >
+          xcodebuild -project App/Splatcap.xcodeproj -scheme Splatcap
+          -sdk iphoneos -configuration Release -destination 'generic/platform=iOS'
+          CODE_SIGNING_ALLOWED=NO -derivedDataPath build
+      - name: Package IPA
+        run: |
+          mkdir Payload
+          cp -R build/Build/Products/Release-iphoneos/Splatcap.app Payload/
+          zip -r Splatcap.ipa Payload
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Splatcap.ipa
+          path: Splatcap.ipa
