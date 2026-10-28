@@ -6,7 +6,8 @@ import SplatcapCore
 import UIKit
 
 /// Records an ARKit session as a Nerfstudio dataset in Documents/<timestamp>/ (one subfolder per ARKit segment after the first).
-/// Both modes read the top-resolution video stream, so there is no shutter sound and no pause in the preview.
+/// Continua saves frames from the top-resolution video stream (silent). Dettaglio takes ARKit high-resolution stills
+/// (about 12 MP, with the system shutter sound and a short pause) whenever the phone is steady.
 final class CaptureSession: NSObject, ARSessionDelegate, ObservableObject {
     enum Mode: String, CaseIterable, Identifiable {
         case continuous = "Continua"
@@ -29,6 +30,7 @@ final class CaptureSession: NSObject, ARSessionDelegate, ObservableObject {
     @Published var isPreviewing = false
     @Published var trackingText = "-"
     @Published var exposureText = "-"
+    @Published var detailBlockMs = 0
     @Published var lastImageInfo = "-"
     @Published var sessionName = "-"
     @Published var lastError: String?
@@ -38,6 +40,7 @@ final class CaptureSession: NSObject, ARSessionDelegate, ObservableObject {
     var onFrame: ((ARFrame) -> Void)?
 
     private static let jpegQuality = 0.95
+    private static let detailInterval = 1.2
     private static let maxSeedPoints = 2_000_000
 
     // main-thread state
@@ -47,6 +50,11 @@ final class CaptureSession: NSObject, ARSessionDelegate, ObservableObject {
     private var inFlight = false
     private var lastAttempt = -1.0
     private var previousPose: (transform: simd_float4x4, timestamp: Double)?
+    private var previewMode: Mode?
+    private var latestDepthFrame: ARFrame?
+    private var detailTimer: Timer?
+    private var lastBlur: Float = .infinity
+    private var lastDetail = -1.0
     private var fpsTicks = 0
     private var fpsWindowStart = Date()
     private var lastReliableCheck = 0.0
@@ -88,6 +96,8 @@ final class CaptureSession: NSObject, ARSessionDelegate, ObservableObject {
         interrupted = false
         inFlight = false
         lastAttempt = -1
+        lastDetail = -1
+        latestDepthFrame = nil
 
         let dir = Self.newSessionDirectory()
         sessionName = dir.lastPathComponent
@@ -102,9 +112,12 @@ final class CaptureSession: NSObject, ARSessionDelegate, ObservableObject {
             logHandle = Self.openLog(dir.appendingPathComponent("capture_log.jsonl"))
         }
 
-        preview()
+        preview(mode: mode)
         guard isPreviewing else { return }
         isRunning = true
+        if mode == .detail {
+            detailTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in self?.captureDetailIfSteady() }
+        }
         UIDevice.current.beginGeneratingDeviceOrientationNotifications()
         UIApplication.shared.isIdleTimerDisabled = true
         // Freeze only the white balance, so colours stay consistent. Exposure and focus stay automatic:
@@ -112,17 +125,20 @@ final class CaptureSession: NSObject, ARSessionDelegate, ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in self?.lockWhiteBalance(true) }
     }
 
-    /// Runs ARKit without recording, so the live view works before the first capture. No-op if already running.
-    func preview() {
-        guard !isPreviewing else { return }
+    /// Runs ARKit without recording, so the live view works before the first capture. Restarts only when the mode changes.
+    func preview(mode: Mode) {
+        guard !isRunning, !(isPreviewing && previewMode == mode) else { return }
+        self.mode = mode
         guard ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) else {
             lastError = "Questo dispositivo non ha il LiDAR (sceneDepth non supportato)."
             return
         }
         let configuration = ARWorldTrackingConfiguration()
         configuration.frameSemantics = .sceneDepth
-        configuration.videoFormat = Self.videoFormat()
+        configuration.videoFormat = Self.videoFormat(for: mode)
         config = configuration
+        previewMode = mode
+        previousPose = nil
         session.delegate = self
         session.run(configuration, options: [.resetTracking, .removeExistingAnchors])
         isPreviewing = true
@@ -133,6 +149,8 @@ final class CaptureSession: NSObject, ARSessionDelegate, ObservableObject {
 
     func stop() {
         guard isRunning else { return }
+        detailTimer?.invalidate()
+        detailTimer = nil
         isRunning = false
         isPaused = false
         lockWhiteBalance(false)
@@ -146,16 +164,25 @@ final class CaptureSession: NSObject, ARSessionDelegate, ObservableObject {
         tick(frame)
         let previous = previousPose
         previousPose = (frame.camera.transform, frame.timestamp)
+        if mode == .detail {
+            latestDepthFrame = frame
+            if let previous { lastBlur = Self.blur(frame, since: previous) }
+            return
+        }
         guard isRunning, !isPaused, !interrupted, !inFlight, let previous,
               frame.timestamp - lastAttempt >= Self.profile(mode).minInterval,
               case .normal = frame.camera.trackingState else { return }
-        let blur = MotionBlur.pixels(previous: previous.transform, current: frame.camera.transform,
-                                     seconds: frame.timestamp - previous.timestamp, exposure: frame.camera.exposureDuration,
-                                     focalPixels: frame.camera.intrinsics[0][0], depth: Self.centreDepth(frame))
+        let blur = Self.blur(frame, since: previous)
         guard blur <= Self.profile(mode).maxBlurPixels else { return }
         lastAttempt = frame.timestamp
         inFlight = true
-        enqueue(frame: frame, blur: blur, turns: currentTurns())
+        enqueue(frame: frame, depthFrame: frame, blur: blur, turns: currentTurns(), depthTimestamp: nil)
+    }
+
+    private static func blur(_ frame: ARFrame, since previous: (transform: simd_float4x4, timestamp: Double)) -> Float {
+        MotionBlur.pixels(previous: previous.transform, current: frame.camera.transform,
+                          seconds: frame.timestamp - previous.timestamp, exposure: frame.camera.exposureDuration,
+                          focalPixels: frame.camera.intrinsics[0][0], depth: centreDepth(frame))
     }
 
     func sessionWasInterrupted(_ session: ARSession) {
@@ -217,17 +244,42 @@ final class CaptureSession: NSObject, ARSessionDelegate, ObservableObject {
         return lastTurns
     }
 
-    private func enqueue(frame: ARFrame, blur: Float, turns: Int) {
+    /// Dettaglio: take a high-resolution still when tracking is normal and the phone is steady enough.
+    private func captureDetailIfSteady() {
+        guard isRunning, !isPaused, !interrupted, !inFlight, let depthFrame = latestDepthFrame,
+              case .normal = depthFrame.camera.trackingState,
+              depthFrame.timestamp - lastDetail >= Self.detailInterval,
+              lastBlur <= Self.profile(.detail).maxBlurPixels else { return }
+        inFlight = true
+        lastDetail = depthFrame.timestamp
+        let turns = currentTurns()
+        let blur = lastBlur
+        let started = Date()
+        session.captureHighResolutionFrame { [weak self] frame, error in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.detailBlockMs = Int(Date().timeIntervalSince(started) * 1000)
+                guard let frame else {
+                    self.lastError = error?.localizedDescription
+                    self.inFlight = false
+                    return
+                }
+                self.enqueue(frame: frame, depthFrame: depthFrame, blur: blur, turns: turns, depthTimestamp: depthFrame.timestamp)
+            }
+        }
+    }
+
+    private func enqueue(frame: ARFrame, depthFrame: ARFrame, blur: Float, turns: Int, depthTimestamp: Double?) {
         workQueue.async { [weak self] in
-            self?.process(frame: frame, blur: blur, turns: turns)
+            self?.process(frame: frame, depthFrame: depthFrame, blur: blur, turns: turns, depthTimestamp: depthTimestamp)
             DispatchQueue.main.async { self?.inFlight = false }
         }
     }
 
     // MARK: processing (work queue)
 
-    private func process(frame: ARFrame, blur: Float, turns: Int) {
-        guard let exporter, let depthData = frame.sceneDepth,
+    private func process(frame: ARFrame, depthFrame: ARFrame, blur: Float, turns: Int, depthTimestamp: Double?) {
+        guard let exporter, let depthData = depthFrame.sceneDepth,
               let depth = Self.readDepth(depthData.depthMap), let conf = Self.readConfidence(depthData.confidenceMap),
               depth.width == conf.width, depth.height == conf.height else { return }
 
@@ -253,8 +305,8 @@ final class CaptureSession: NSObject, ARSessionDelegate, ObservableObject {
             DispatchQueue.main.async { self.lastError = "Scrittura fallita: \(error.localizedDescription)" }
             return
         }
-        addSeed(frame: frame, depth: depth, conf: conf)
-        writeLog(name: name, frame: frame, sharpness: candidate.sharpness, blur: blur, jpegBytes: jpeg.count, turns: turns)
+        addSeed(frame: depthFrame, depth: depth, conf: conf)
+        writeLog(name: name, frame: frame, depthTimestamp: depthTimestamp, sharpness: candidate.sharpness, blur: blur, jpegBytes: jpeg.count, turns: turns)
         let info = "\(up.width)x\(up.height) \(jpeg.count / 1024) KB"
         DispatchQueue.main.async {
             self.frameCount += 1
@@ -316,10 +368,11 @@ final class CaptureSession: NSObject, ARSessionDelegate, ObservableObject {
         openExporter(in: root.appendingPathComponent("segment_\(segment)"))
     }
 
-    private func writeLog(name: String, frame: ARFrame, sharpness: Float, blur: Float, jpegBytes: Int, turns: Int) {
-        let entry: [String: Any] = ["name": name, "segment": segment, "timestamp": frame.timestamp, "sharpness": sharpness,
+    private func writeLog(name: String, frame: ARFrame, depthTimestamp: Double?, sharpness: Float, blur: Float, jpegBytes: Int, turns: Int) {
+        var entry: [String: Any] = ["name": name, "segment": segment, "timestamp": frame.timestamp, "sharpness": sharpness,
                                     "blurPixels": blur, "exposureSeconds": frame.camera.exposureDuration,
                                     "jpegBytes": jpegBytes, "quarterTurns": turns, "mode": mode.rawValue]
+        if let depthTimestamp { entry["depthTimestamp"] = depthTimestamp }
         guard let data = try? JSONSerialization.data(withJSONObject: entry), let h = logHandle else { return }
         h.write(data + Data("\n".utf8))
     }
@@ -338,7 +391,8 @@ final class CaptureSession: NSObject, ARSessionDelegate, ObservableObject {
 
     // MARK: camera setup
 
-    private static func videoFormat() -> ARConfiguration.VideoFormat {
+    private static func videoFormat(for mode: Mode) -> ARConfiguration.VideoFormat {
+        if mode == .detail, let f = ARWorldTrackingConfiguration.recommendedVideoFormatForHighResolutionFrameCapturing { return f }
         let best = ARWorldTrackingConfiguration.supportedVideoFormats.max { a, b in
             let pa = a.imageResolution.width * a.imageResolution.height, pb = b.imageResolution.width * b.imageResolution.height
             return pa != pb ? pa < pb : a.framesPerSecond < b.framesPerSecond
