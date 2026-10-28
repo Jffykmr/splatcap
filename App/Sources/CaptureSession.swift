@@ -18,6 +18,7 @@ final class CaptureSession: NSObject, ARSessionDelegate, ObservableObject {
     @Published var fps = 0
     @Published var isRunning = false
     @Published var isPaused = false
+    @Published var isPreviewing = false
     @Published var trackingText = "-"
     @Published var lastImageInfo = "-"
     @Published var detailBlockMs = 0
@@ -25,6 +26,8 @@ final class CaptureSession: NSObject, ARSessionDelegate, ObservableObject {
     @Published var lastError: String?
 
     let session = ARSession()
+    /// Called on the main queue for every ARKit frame (the live view draws its overlay from it).
+    var onFrame: ((ARFrame) -> Void)?
 
     private static let minInterval = 0.2
     private static let detailInterval = 1.5
@@ -34,6 +37,7 @@ final class CaptureSession: NSObject, ARSessionDelegate, ObservableObject {
     // main-thread state
     private var mode = Mode.continuous
     private var config: ARWorldTrackingConfiguration?
+    private var previewMode: Mode?
     private var interrupted = false
     private var inFlight = false
     private var lastAttempt = -1.0
@@ -90,12 +94,7 @@ final class CaptureSession: NSObject, ARSessionDelegate, ObservableObject {
             logHandle = Self.openLog(dir.appendingPathComponent("capture_log.jsonl"))
         }
 
-        let configuration = ARWorldTrackingConfiguration()
-        configuration.frameSemantics = .sceneDepth
-        configuration.videoFormat = Self.videoFormat(for: mode)
-        config = configuration
-        session.delegate = self
-        session.run(configuration, options: [.resetTracking, .removeExistingAnchors])
+        preview(mode: mode)
         isRunning = true
         UIDevice.current.beginGeneratingDeviceOrientationNotifications()
         UIApplication.shared.isIdleTimerDisabled = true
@@ -106,6 +105,23 @@ final class CaptureSession: NSObject, ARSessionDelegate, ObservableObject {
         }
     }
 
+    /// Runs ARKit without recording, so the live view works before the first capture. No-op if already running in this mode.
+    func preview(mode: Mode) {
+        guard !isRunning, !(isPreviewing && previewMode == mode) else { return }
+        guard ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) else {
+            lastError = "Questo dispositivo non ha il LiDAR (sceneDepth non supportato)."
+            return
+        }
+        let configuration = ARWorldTrackingConfiguration()
+        configuration.frameSemantics = .sceneDepth
+        configuration.videoFormat = Self.videoFormat(for: mode)
+        config = configuration
+        previewMode = mode
+        session.delegate = self
+        session.run(configuration, options: [.resetTracking, .removeExistingAnchors])
+        isPreviewing = true
+    }
+
     func pause() { isPaused = true }
     func resume() { isPaused = false }
 
@@ -113,9 +129,9 @@ final class CaptureSession: NSObject, ARSessionDelegate, ObservableObject {
         guard isRunning else { return }
         detailTimer?.invalidate()
         detailTimer = nil
-        session.pause()
         isRunning = false
         isPaused = false
+        unlockCamera()
         UIApplication.shared.isIdleTimerDisabled = false
         workQueue.async { [weak self] in self?.closeSegment() }
     }
@@ -141,10 +157,10 @@ final class CaptureSession: NSObject, ARSessionDelegate, ObservableObject {
     }
 
     func sessionInterruptionEnded(_ session: ARSession) {
-        guard isRunning, let config else { return }
+        guard isPreviewing, let config else { return }
         // Poses from before the interruption cannot be trusted: restart tracking and write a new segment folder.
         session.run(config, options: [.resetTracking, .removeExistingAnchors])
-        workQueue.async { [weak self] in self?.openNextSegment() }
+        if isRunning { workQueue.async { [weak self] in self?.openNextSegment() } }
         interrupted = false
     }
 
@@ -159,6 +175,7 @@ final class CaptureSession: NSObject, ARSessionDelegate, ObservableObject {
     // MARK: frame intake (main queue)
 
     private func tick(_ frame: ARFrame) {
+        onFrame?(frame)
         fpsTicks += 1
         let now = Date()
         if now.timeIntervalSince(fpsWindowStart) >= 1 {
@@ -353,9 +370,22 @@ final class CaptureSession: NSObject, ARSessionDelegate, ObservableObject {
         }
     }
 
+    private func unlockCamera() {
+        guard let device = ARWorldTrackingConfiguration.configurableCaptureDeviceForPrimaryCamera else { return }
+        do {
+            try device.lockForConfiguration()
+            if device.isExposureModeSupported(.continuousAutoExposure) { device.exposureMode = .continuousAutoExposure }
+            if device.isFocusModeSupported(.continuousAutoFocus) { device.focusMode = .continuousAutoFocus }
+            if device.isWhiteBalanceModeSupported(.continuousAutoWhiteBalance) { device.whiteBalanceMode = .continuousAutoWhiteBalance }
+            device.unlockForConfiguration()
+        } catch {
+            lastError = "Sblocco fotocamera non riuscito: \(error.localizedDescription)"
+        }
+    }
+
     // MARK: pixel buffer reading
 
-    private static func readDepth(_ map: CVPixelBuffer) -> (data: [Float], width: Int, height: Int)? {
+    static func readDepth(_ map: CVPixelBuffer) -> (data: [Float], width: Int, height: Int)? {
         CVPixelBufferLockBaseAddress(map, .readOnly)
         defer { CVPixelBufferUnlockBaseAddress(map, .readOnly) }
         guard let base = CVPixelBufferGetBaseAddress(map) else { return nil }
@@ -368,7 +398,7 @@ final class CaptureSession: NSObject, ARSessionDelegate, ObservableObject {
         return (out, w, h)
     }
 
-    private static func readConfidence(_ map: CVPixelBuffer?) -> (data: [UInt8], width: Int, height: Int)? {
+    static func readConfidence(_ map: CVPixelBuffer?) -> (data: [UInt8], width: Int, height: Int)? {
         guard let map else { return nil }
         CVPixelBufferLockBaseAddress(map, .readOnly)
         defer { CVPixelBufferUnlockBaseAddress(map, .readOnly) }
