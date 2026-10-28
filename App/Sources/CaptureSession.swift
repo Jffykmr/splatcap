@@ -16,7 +16,8 @@ final class CaptureSession: NSObject, ARSessionDelegate, ObservableObject {
     }
 
     private struct Profile {
-        let minInterval: Double
+        /// Continua picks the steadiest frame of each window of this many seconds.
+        let window: Double
         let maxBlurPixels: Float
         let minTranslation: Float
         let minRotationDegrees: Float
@@ -48,7 +49,8 @@ final class CaptureSession: NSObject, ARSessionDelegate, ObservableObject {
     private var config: ARWorldTrackingConfiguration?
     private var interrupted = false
     private var inFlight = false
-    private var lastAttempt = -1.0
+    private var windowBest: (frame: ARFrame, blur: Float)?
+    private var windowStart = -1.0
     private var previousPose: (transform: simd_float4x4, timestamp: Double)?
     private var previewMode: Mode?
     private var latestDepthFrame: ARFrame?
@@ -74,14 +76,15 @@ final class CaptureSession: NSObject, ARSessionDelegate, ObservableObject {
 
     private static func profile(_ mode: Mode) -> Profile {
         switch mode {
-        case .continuous: return Profile(minInterval: 0.1, maxBlurPixels: 1.5, minTranslation: 0.08, minRotationDegrees: 4)
-        case .detail: return Profile(minInterval: 0.1, maxBlurPixels: 0.8, minTranslation: 0.04, minRotationDegrees: 2)
+        // Blur limits are in pixels of the full-resolution image (about 4K): only clearly smeared frames are dropped.
+        case .continuous: return Profile(window: 0.4, maxBlurPixels: 5, minTranslation: 0.06, minRotationDegrees: 3)
+        case .detail: return Profile(window: 0, maxBlurPixels: 3, minTranslation: 0.04, minRotationDegrees: 2)
         }
     }
 
     private static func newSelector(_ mode: Mode) -> FrameSelector {
         let p = profile(mode)
-        return FrameSelector(minSharpness: 0.5, minTranslation: p.minTranslation, minRotationDegrees: p.minRotationDegrees,
+        return FrameSelector(minSharpness: 0.35, minTranslation: p.minTranslation, minRotationDegrees: p.minRotationDegrees,
                              maxBlurPixels: p.maxBlurPixels)
     }
 
@@ -95,7 +98,8 @@ final class CaptureSession: NSObject, ARSessionDelegate, ObservableObject {
         isPaused = false
         interrupted = false
         inFlight = false
-        lastAttempt = -1
+        windowBest = nil
+        windowStart = -1
         lastDetail = -1
         latestDepthFrame = nil
 
@@ -169,14 +173,20 @@ final class CaptureSession: NSObject, ARSessionDelegate, ObservableObject {
             if let previous { lastBlur = Self.blur(frame, since: previous) }
             return
         }
-        guard isRunning, !isPaused, !interrupted, !inFlight, let previous,
-              frame.timestamp - lastAttempt >= Self.profile(mode).minInterval,
-              case .normal = frame.camera.trackingState else { return }
+        guard isRunning, !isPaused, !interrupted, let previous, case .normal = frame.camera.trackingState else {
+            windowBest = nil
+            return
+        }
         let blur = Self.blur(frame, since: previous)
-        guard blur <= Self.profile(mode).maxBlurPixels else { return }
-        lastAttempt = frame.timestamp
+        if windowBest == nil || blur < windowBest!.blur { windowBest = (frame, blur) }
+        if windowStart < 0 { windowStart = frame.timestamp }
+        guard frame.timestamp - windowStart >= Self.profile(mode).window else { return }
+        let best = windowBest
+        windowBest = nil
+        windowStart = frame.timestamp
+        guard let best, !inFlight, best.blur <= Self.profile(mode).maxBlurPixels else { return }
         inFlight = true
-        enqueue(frame: frame, depthFrame: frame, blur: blur, turns: currentTurns(), depthTimestamp: nil)
+        enqueue(frame: best.frame, depthFrame: best.frame, blur: best.blur, turns: currentTurns(), depthTimestamp: nil)
     }
 
     private static func blur(_ frame: ARFrame, since previous: (transform: simd_float4x4, timestamp: Double)) -> Float {

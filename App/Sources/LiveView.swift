@@ -6,18 +6,14 @@ import SwiftUI
 private struct ARViewContainer: UIViewRepresentable {
     let capture: CaptureSession
 
-    final class Coordinator { let overlay = PointOverlay() }
-
-    func makeCoordinator() -> Coordinator { Coordinator() }
-
     func makeUIView(context: Context) -> ARSCNView {
         let view = ARSCNView(frame: .zero)
         view.session = capture.session
-        view.scene = SCNScene()
         view.automaticallyUpdatesLighting = false
-        view.scene.rootNode.addChildNode(context.coordinator.overlay.node)
-        let overlay = context.coordinator.overlay
-        capture.onFrame = { frame in overlay.update(frame: frame) }
+        let overlay = PointOverlayView(frame: view.bounds)
+        overlay.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        view.addSubview(overlay)
+        capture.onFrame = { [weak overlay] frame in overlay?.update(frame: frame) }
         return view
     }
 
