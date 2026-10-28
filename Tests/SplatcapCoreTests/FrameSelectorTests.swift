@@ -38,6 +38,23 @@ final class FrameSelectorTests: XCTestCase {
         XCTAssertTrue(s.accept(candidate(t: 2, x: 0.2, yawDeg: 10)))
     }
 
+    func testRejectsEstimatedMotionBlur() {
+        var s = FrameSelector(minSharpness: 0.5, minTranslation: 0.1, minRotationDegrees: 5, maxBlurPixels: 1.5)
+        var blurry = candidate()
+        blurry.blurPixels = 4
+        XCTAssertFalse(s.accept(blurry))
+        var fine = candidate()
+        fine.blurPixels = 0.5
+        XCTAssertTrue(s.accept(fine))
+    }
+
+    func testNaNBlurIsRejectedWhenLimited() {
+        var s = FrameSelector(minSharpness: 0.5, minTranslation: 0.1, minRotationDegrees: 5, maxBlurPixels: 1.5)
+        var c = candidate()
+        c.blurPixels = .nan
+        XCTAssertFalse(s.accept(c))
+    }
+
     func testRejectsNonFiniteTransform() {
         var s = selector()
         XCTAssertFalse(s.accept(candidate(x: .nan)))

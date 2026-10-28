@@ -5,12 +5,15 @@ public struct FrameCandidate {
     public var transform: simd_float4x4
     public var sharpness: Float
     public var trackingNormal: Bool
+    /// Estimated motion blur in image pixels (see `MotionBlur`); 0 when unknown.
+    public var blurPixels: Float
 
-    public init(timestamp: Double, transform: simd_float4x4, sharpness: Float, trackingNormal: Bool) {
+    public init(timestamp: Double, transform: simd_float4x4, sharpness: Float, trackingNormal: Bool, blurPixels: Float = 0) {
         self.timestamp = timestamp
         self.transform = transform
         self.sharpness = sharpness
         self.trackingNormal = trackingNormal
+        self.blurPixels = blurPixels
     }
 }
 
@@ -19,16 +22,18 @@ public struct FrameSelector {
     public let minSharpness: Float
     public let minTranslation: Float
     public let minRotationDegrees: Float
+    public let maxBlurPixels: Float
     private var last: simd_float4x4?
 
-    public init(minSharpness: Float, minTranslation: Float, minRotationDegrees: Float) {
+    public init(minSharpness: Float, minTranslation: Float, minRotationDegrees: Float, maxBlurPixels: Float = .infinity) {
         self.minSharpness = minSharpness
         self.minTranslation = minTranslation
         self.minRotationDegrees = minRotationDegrees
+        self.maxBlurPixels = maxBlurPixels
     }
 
     public mutating func accept(_ c: FrameCandidate) -> Bool {
-        guard c.trackingNormal, c.sharpness >= minSharpness, Self.isFinite(c.transform) else { return false }
+        guard c.trackingNormal, c.sharpness >= minSharpness, c.blurPixels <= maxBlurPixels, Self.isFinite(c.transform) else { return false }
         if let prev = last {
             let moved = simd_distance(Self.translation(prev), Self.translation(c.transform))
             guard moved >= minTranslation || Self.rotationDegrees(prev, c.transform) >= minRotationDegrees else { return false }
@@ -41,7 +46,7 @@ public struct FrameSelector {
         [m.columns.0, m.columns.1, m.columns.2, m.columns.3].allSatisfy { $0.x.isFinite && $0.y.isFinite && $0.z.isFinite && $0.w.isFinite }
     }
 
-    private static func translation(_ m: simd_float4x4) -> SIMD3<Float> {
+    static func translation(_ m: simd_float4x4) -> SIMD3<Float> {
         SIMD3(m.columns.3.x, m.columns.3.y, m.columns.3.z)
     }
 
@@ -52,7 +57,7 @@ public struct FrameSelector {
         return simd_quatf(simd_float3x3(c0, c1, c2))
     }
 
-    private static func rotationDegrees(_ a: simd_float4x4, _ b: simd_float4x4) -> Float {
+    static func rotationDegrees(_ a: simd_float4x4, _ b: simd_float4x4) -> Float {
         let d = min(abs(simd_dot(rotation(a).vector, rotation(b).vector)), 1)
         return 2 * acos(d) * 180 / .pi
     }

@@ -38,8 +38,7 @@ struct LiveView: View {
             }
             .padding()
         }
-        .onAppear { capture.preview(mode: mode) }
-        .onChange(of: mode) { _, new in capture.preview(mode: new) }
+        .onAppear { capture.preview() }
     }
 
     private var topBar: some View {
@@ -50,8 +49,8 @@ struct LiveView: View {
                 Label("\(capture.fps) fps", systemImage: "speedometer")
             }
             .font(.headline.monospacedDigit())
-            Text("Tracking: \(capture.trackingText) · \(capture.lastImageInfo)").font(.caption.monospacedDigit())
-            if capture.detailBlockMs > 0 { Text("Blocco Dettaglio: \(capture.detailBlockMs) ms").font(.caption.monospacedDigit()) }
+            Text("Tracking: \(capture.trackingText) · esposizione \(capture.exposureText)").font(.caption.monospacedDigit())
+            Text("Ultima foto: \(capture.lastImageInfo)").font(.caption.monospacedDigit())
             if let e = capture.lastError { Text(e).font(.caption).foregroundColor(.red) }
         }
         .padding(.horizontal, 14)
